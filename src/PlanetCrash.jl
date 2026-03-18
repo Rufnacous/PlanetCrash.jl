@@ -1,113 +1,76 @@
 module PlanetCrash
 
-    using Plots, DifferentialEquations, LinearAlgebra, Distances
+    using Plots, DifferentialEquations, LinearAlgebra, Distances, DelimitedFiles
 
+    function init_planet(N, m, k, G; T=100, c=0.0003, P=100, E=0.01, dc=10)
+
+        initcond = zeros(5N);
+        initcond[begin:2N] .= 5rand(2N);
+        initcond[(4N+1):end] .= 1;
+
+        prob = ODEProblem(v_cauchy, initcond, [0,T], (N, m, k, G, c, P, E, dc))
+        sol = solve(prob, TRBDF2(autodiff=false))
+
+        outcond_pos = sol(sol.t[end])[1:2N]
+        mean_x = sum(outcond_pos[1:2:end])/N
+        mean_y = sum(outcond_pos[2:2:end])/N
+        outcond_pos[1:2:end] .-= mean_x
+        outcond_pos[2:2:end] .-= mean_y
+
+        writedlm( "./planets/N$(N)_m$(m)_k$(k)_g$(G).csv", outcond_pos, ',' )
+    end
+
+    function spin_planet(xys, theta_dot)
+        vs = zeros(size(xys));
+        rs = sqrt.((xys[1:2:end] .^ 2) .+ (xys[2:2:end] .^ 2));
+        vs[1:2:end] .= -xys[2:2:end] .* theta_dot;
+        vs[2:2:end] .=  xys[1:2:end] .* theta_dot;
+        return vs;
+    end
 
     function test()
 
-        N = 30
+        N1 = 30; N2 = 20; N = N1 + N2;
+        m = 1; k = 0.1; G = 0.2;
+        sep = 5
+
+        planet1 = readdlm( "./planets/N$(N1)_m$(m)_k$(k)_g$(G).csv", ',', Float64, '\n');
+        planet2 = readdlm( "./planets/N$(N2)_m$(m)_k$(k)_g$(G).csv", ',', Float64, '\n');
         initcond = zeros(5N);
-        positions = @view initcond[begin:2N];
-        velocities = @view initcond[(2N+1):(4N)];
-        temps = @view initcond[(4N+1):end];
+        initcond[1:(2N1)] .= planet1;
+        initcond[1:2:(2N1)] .-= sep;
+        initcond[(2N1+1):(2N)] .= planet2;
+        initcond[(2N1+1):2:(2N)] .+= sep;
 
-        temps .= 1 .+ 0.1rand(N)
+        # initcond[(2N+1):(2N+2N1)] .= spin_planet(planet1, 1.4)
+        initcond[(2N+2N1+1):2:(4N)] .= -3.0
+        initcond[(2N+2N1+2):2:(4N)] .= -0.5
 
-
-        # positions[3] = 1
-        # positions[1] = -positions[3]
-
-        positions .= 5rand(2N);
-        # positions[begin:2:Integer(round(N/2))] .+= 20;
-
-        # velocities[12:2:end] .+= 20;
-
-        tspan = [0,20];
-        
-        # p = (N, 1, 0.1, 0.2, 0.0003, 100, 0.0);
-        p = (N, 1, 0.1, 0.2, 0.0003, 100, 0.01, 10);
-        prob = ODEProblem(v_cauchy, initcond, tspan, p)
-        sol = solve(prob, TRBDF2(autodiff=false))
-
-
-        
-
-        default(show=true);
-
-        ts = LinRange(0, tspan[end], 1+Integer(round(10*tspan[end])));
-        xys = zeros(N,2, length(ts))
-        temp_s = zeros(N, length(ts))
-        for (ti, t) in enumerate(ts)
-            sol_ti = sol(t);
-            xys[:,:,ti] .= reshape(sol_ti[1:2N], (2,N))';
-            temp_s[:,ti] .= sol_ti[(4N+1):5N];
-        end
-        # display(xys)
-        # display(temp_s)
-
-        plot([],[],label="", aspect_ratio=:equal);
-        for ni in 1:N
-            plot!(xys[ni,1,:], xys[ni,2,:], label="", linez=temp_s[ni,:], c=:turbo, linewidth=2);
-        end
-
-
-        print(">");
-        if readline() == "q"
-            return
-        end
-
-        initcond2 = sol(tspan[end])[1:2N]
-        initcond2[1:2:end] .-= initcond2[1]
-        initcond2[2:2:end] .-= initcond2[2]
-        Nold = N
-        N = 2N
-        initcond2 = [initcond2..., initcond2..., (1 .+ 0.1rand(N))..., zeros(3N)...];
-        
-        positions = @view initcond2[begin:2N];
-        velocities = @view initcond2[(2N+1):end];
-        
-        sep = 15
-        positions[1:2:(2Nold)] .-= sep
-        positions[(2Nold+1):2:end] .+= sep
-
-
-        
-        velocities[1:2:(2Nold)] .= 2.0
-        velocities[(2Nold+1):2:end] .= -2.0
-        
-        velocities[2:2:(2Nold)] .= 0.07
-        velocities[(2Nold+2):2:end] .= -0.07
-
-        tspan = [0,60];
-        p = (N, 1, 0.1, 0.2, 0.00003, 0.005, 0.03, 40);  # test 2
+        tspan = [0,30];
+        p = (N, m, k, G, 0.00003, 0.005, 0.03, 40);
 
         checkpoints = [perc*tspan[end] for perc in 0.01:0.01:1.0]
-
-        prob = ODEProblem(v_cauchy, initcond2, tspan, p, tstops = checkpoints)
-
         condition(u, t, integrator) = any(t .== checkpoints);
         affect!(integrator) = println("T = $(integrator.t)");
         cb_checkpoints = DiscreteCallback(condition, affect!);
+
+        prob = ODEProblem(v_cauchy, initcond, tspan, p, tstops = checkpoints)
         
         sol = solve(prob, TRBDF2(autodiff=false), callback=cb_checkpoints)
 
+        default(show=true);
 
-
-        default(show=false);
-
-        FPS = 5
+        FPS = 15
         ts = LinRange(0, tspan[end], 1+Integer(round(FPS*tspan[end])));
 
-        mintemp = 0 #min(0, minimum([minimum(sol(t)[(4N+1):5N]) for t in ts]))
-        maxtemp = max(1, maximum([maximum(sol(t)[(4N+1):5N]) for t in ts]))
+        mintemp = minimum([minimum(sol(t)[(4N+1):5N]) for t in ts])
+        maxtemp = maximum([maximum(sol(t)[(4N+1):5N]) for t in ts])
+        midtemp = 0.5(mintemp + maxtemp)
 
-        # ENV["GKSWSTYPE"] = "" #100 #""
         println("Plotting")
         anim = @animate for (ti,t) in enumerate(ts)
-            sol_ti = sol(t)[1:5N];
-
-            xs, ys = sol_ti[1:2:2N], sol_ti[2:2:2N]
-            temps = sol_ti[(4N+1):5N]
+            sol_ti = sol(t);
+            xs, ys, temps = sol_ti[1:2:2N], sol_ti[2:2:2N], sol_ti[(4N+1):5N]
 
             xs .-= sum(xs)/N
             ys .-= sum(ys)/N
@@ -118,21 +81,30 @@ module PlanetCrash
                 title="$(Integer(round(10t))/10)", aspect_ratio=:equal,
                 xlims=(-lim,lim), ylims=(-lim,lim), framestyle=:box,
                 label="", 
-                zcolor = temps, color=:turbo, clims=(mintemp,maxtemp),
-                markerstrokewidth = 0,
-                # zcolor=[ifelse(i<=0.5N, -1, 1) for i in 1:N], cbar=nothing, color=:bam, clims=(-2,2)
+                color=RGB(94/255, 79/255,162/255),
+                dpi=150
+                )
+            scatter!(xs, ys, 
+                label="", 
+                markeralphas = [min(1, 2(temps[i]-mintemp) / (maxtemp-mintemp)) for i in eachindex(temps)],
+                color=RGB(255/255,255/255,191/255)
+                )
+            scatter!(xs, ys, 
+                label="", 
+                markeralphas = [(max(midtemp,temps[i])-midtemp) / (maxtemp-midtemp) for i in eachindex(temps)],
+                color=RGB(158/255,1/255,66/255)
                 )
 
+            # Insane bug fix with marker colours. GR is messed up, somehow.
+            # It's not to do with the gif() saving via ffmpeg, it's GR's png
+            # saving. Idk about other file formats.
+            # It started with flickering in the gifs, replicable in series png
+            # saving (see temp folder for gif), and has progressed to this insane
+            # thing with RGB. Somehow, scaling from 0.25,1.0,0.25 to 0,1,0
+            # produces the blue to red transition I want.
         end
 
         gif(anim, "planet_crash.gif", fps=15)
-
-        # plot(sol.t,label="",ylabel="t",xlabel="ti",framestyle=:box)
-        # savefig("tsteps.png")
-
-
-        # plot(sol, idxs=1:2:2N)
-
 
 
     end
